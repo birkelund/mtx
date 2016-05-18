@@ -41,6 +41,16 @@ type Interface interface {
 	Do(args ...string) ([]byte, error)
 }
 
+type Status struct {
+	MaxDrives       int
+	NumSlots        int
+	NumStorageSlots int
+	NumMailSlots    int
+
+	Drives []*Slot
+	Slots  []*Slot
+}
+
 // Volume represents a tape.
 type Volume struct {
 	// The VOLSER of the tape.
@@ -115,7 +125,12 @@ func (chgr *Changer) Transfer(slotnum, drivenum int) error {
 // does not necessary correspond to the number of actual drives present in
 // the system.
 func (chgr *Changer) MaxDrives() (int, error) {
-	params, err := chgr.params()
+	status, err := chgr.Do("status")
+	if err != nil {
+		return -1, err
+	}
+
+	params, err := chgr.params(status)
 	if err != nil {
 		return -1, err
 	}
@@ -125,7 +140,12 @@ func (chgr *Changer) MaxDrives() (int, error) {
 
 // NumSlots returns the number of storage and mail slots.
 func (chgr *Changer) NumSlots() (int, error) {
-	params, err := chgr.params()
+	status, err := chgr.Do("status")
+	if err != nil {
+		return -1, err
+	}
+
+	params, err := chgr.params(status)
 	if err != nil {
 		return -1, err
 	}
@@ -135,7 +155,12 @@ func (chgr *Changer) NumSlots() (int, error) {
 
 // NumStorageSlots returns the number of storage slots.
 func (chgr *Changer) NumStorageSlots() (int, error) {
-	params, err := chgr.params()
+	status, err := chgr.Do("status")
+	if err != nil {
+		return -1, err
+	}
+
+	params, err := chgr.params(status)
 	if err != nil {
 		return -1, err
 	}
@@ -145,7 +170,12 @@ func (chgr *Changer) NumStorageSlots() (int, error) {
 
 // NumMailSlots returns the number of mail slots.
 func (chgr *Changer) NumMailSlots() (int, error) {
-	params, err := chgr.params()
+	status, err := chgr.Do("status")
+	if err != nil {
+		return -1, err
+	}
+
+	params, err := chgr.params(status)
 	if err != nil {
 		return -1, err
 	}
@@ -156,7 +186,12 @@ func (chgr *Changer) NumMailSlots() (int, error) {
 // Drives returns a slice of data transfer elements. Note that data transfer
 // slots typically start with slot id 0.
 func (chgr *Changer) Drives() ([]*Slot, error) {
-	elements, err := chgr.elements()
+	status, err := chgr.Do("status")
+	if err != nil {
+		return nil, err
+	}
+
+	elements, err := chgr.elements(status)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +202,12 @@ func (chgr *Changer) Drives() ([]*Slot, error) {
 // Slots returns a slice of storage and mail elements. Note that storage
 // slots typically start with slot id 1 and not 0.
 func (chgr *Changer) Slots() ([]*Slot, error) {
-	elems, err := chgr.elements()
+	status, err := chgr.Do("status")
+	if err != nil {
+		return nil, err
+	}
+
+	elems, err := chgr.elements(status)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +218,12 @@ func (chgr *Changer) Slots() ([]*Slot, error) {
 // StorageSlots returns a slice of storage elements. Note that storage
 // slots typically start with slot id 1 and not 0.
 func (chgr *Changer) StorageSlots() ([]*Slot, error) {
-	elems, err := chgr.elements()
+	status, err := chgr.Do("status")
+	if err != nil {
+		return nil, err
+	}
+
+	elems, err := chgr.elements(status)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +235,12 @@ func (chgr *Changer) StorageSlots() ([]*Slot, error) {
 // typically start with slot ids counting from the id of the last storage
 // slot.
 func (chgr *Changer) MailSlots() ([]*Slot, error) {
-	elems, err := chgr.elements()
+	status, err := chgr.Do("status")
+	if err != nil {
+		return nil, err
+	}
+
+	elems, err := chgr.elements(status)
 	if err != nil {
 		return nil, err
 	}
@@ -198,12 +248,29 @@ func (chgr *Changer) MailSlots() ([]*Slot, error) {
 	return elems["mail"], nil
 }
 
-func (chgr *Changer) elements() (map[string][]*Slot, error) {
+// Status returns a Status structure with combined information about the status
+// of the library.
+func (chgr *Changer) Status() (*Status, error) {
 	status, err := chgr.Do("status")
 	if err != nil {
 		return nil, err
 	}
 
+	params, err := chgr.params(status)
+	elems, err := chgr.elements(status)
+
+	return &Status{
+		MaxDrives:       params["maxDrives"],
+		NumSlots:        params["numSlots"],
+		NumStorageSlots: params["numSlots"] - params["numMailSlots"],
+		NumMailSlots:    params["numMailSlots"],
+
+		Drives: elems["transfer"],
+		Slots:  append(elems["storage"], elems["mail"]...),
+	}, nil
+}
+
+func (chgr *Changer) elements(status []byte) (map[string][]*Slot, error) {
 	elements := map[string][]*Slot{
 		"transfer": make([]*Slot, 0),
 		"storage":  make([]*Slot, 0),
@@ -307,16 +374,12 @@ func (chgr *Changer) elements() (map[string][]*Slot, error) {
 	return elements, nil
 }
 
-func (chgr *Changer) params() (map[string]int, error) {
-	status, err := chgr.Do("status")
-	if err != nil {
-		return nil, err
-	}
-
+func (chgr *Changer) params(status []byte) (map[string]int, error) {
 	params := make(map[string]int)
 
 	scanner := bufio.NewScanner(bytes.NewReader(status))
 
+	var err error
 	if scanner.Scan() {
 		line := scanner.Text()
 
