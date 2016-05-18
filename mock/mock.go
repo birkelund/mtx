@@ -1,3 +1,4 @@
+// Package mock implements a mocked library auto changer that simulates 'mtx'.
 package mock
 
 import (
